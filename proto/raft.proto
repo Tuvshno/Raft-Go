@@ -1,0 +1,49 @@
+syntax = "proto3";
+
+package raft;
+
+option go_package = "./pb";
+
+service Raft {
+  rpc AppendEntries(AppendRequest) returns (AppendResponse);
+  rpc RequestVote(VoteRequest) returns (VoteResponse);
+}
+
+/* 
+ * Invoked by leader to replicate log entries.
+ * Also used as heartbeat.
+*/
+message AppendRequest {
+  int64 term = 1;
+  int64 leaderId = 2;
+  int64 prevLogIndex = 3;
+  int64 prevLogTerm = 4;
+  repeated string entries = 5;
+  int64 leaderCommit = 6;
+}
+
+/*
+ * Response to AppendEntries 
+*/
+message AppendResponse {
+  int64 term = 1;
+  bool success = 2;
+}
+
+/*
+ * Invoked by candidates to gather votes  
+*/
+message VoteRequest {
+  int64 term = 1;
+  int64 candidateId = 2;
+  int64 lastLogIndex = 3;
+  int64 lastLogTerm = 4;
+}
+
+/*
+ * Response from RequestVote  
+*/
+message VoteResponse {
+  int64 term = 1;
+  bool voteGranted = 2;
+}
