@@ -3,6 +3,6 @@ generate:
 build:
 	@go build -o bin/dc
 run: build
-	@./bin/dc
+	@./bin/dc $(ARGS)
 test:
 	@go test

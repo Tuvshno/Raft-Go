@@ -2,16 +2,23 @@ package main
 
 import (
 	"context"
+	"fmt"
+	"log"
+	"math/rand"
+	"sync"
+	"time"
 
 	"github.com/Tuvshno/Raft-Go/pb"
+	"google.golang.org/grpc"
+	"google.golang.org/grpc/credentials/insecure"
 )
 
-type State int
+type State string
 
 const (
-	Leader    State = 0
-	Follower  State = 1
-	Candidate State = 2
+	Follower  State = "Follower"
+	Candidate State = "Candidate"
+	Leader    State = "Leader"
 )
 
 type ServerOpts struct {
@@ -19,22 +26,125 @@ type ServerOpts struct {
 }
 
 type Server struct {
-	// ServerOpts
+	id      int
+	cluster map[int]string
+
 	pb.UnimplementedRaftServer
 
-	// currentTerm int
-	// votedFor    int
-	// log         []string
+	mu                sync.Mutex
+	state             State
+	electionTimeout   time.Duration
+	lastHeartbeatTime time.Time
 
-	// commitIndex int
-	// lastIndex   int
+	currentTerm int
+	votedFor    int
+	log         []string
 
-	// nextIndex  []int
-	// matchIndex []int
+	commitIndex int
+	lastIndex   int
+
+	nextIndex  []int
+	matchIndex []int
 }
 
-func NewServer() *Server {
-	return &Server{}
+func NewServer(id int) *Server {
+	// Hard Coded Cluster
+	cluster := map[int]string{
+		1: ":8001",
+		2: ":8002",
+		3: ":8003",
+		4: ":8004",
+		5: ":8005",
+	}
+	delete(cluster, id)
+
+	s := &Server{
+		id:      id,
+		cluster: cluster,
+
+		state: Follower,
+
+		currentTerm: 0,
+		votedFor:    -1,
+		log:         make([]string, 0),
+
+		commitIndex: -1,
+		lastIndex:   -1,
+
+		nextIndex:  make([]int, 0),
+		matchIndex: make([]int, 0),
+	}
+	s.resetElectionTimeout()
+
+	return s
+}
+
+func (s *Server) electionTimer() {
+	for {
+		s.mu.Lock()
+		if time.Since(s.lastHeartbeatTime) >= s.electionTimeout {
+			log.Printf("Election Timeout: %s", s.electionTimeout)
+			s.state = Candidate
+			log.Printf("Becoming: %s", s.state)
+			s.currentTerm += 1
+			log.Printf("Starting new election %d...", s.currentTerm)
+
+			electionSuccess := false
+			numVotes := 0
+			for _, port := range s.cluster {
+				ctx := context.Background()
+				success, err := s.RequestVoteToServer(ctx, port)
+				if err != nil {
+					log.Println(err)
+				}
+				if success {
+					numVotes += 1
+				}
+			}
+			if numVotes > len(s.cluster)/2 {
+				electionSuccess = true
+			}
+
+			if electionSuccess {
+				s.state = Leader
+			} else {
+				log.Println("Election Failed")
+				s.resetElectionTimeout()
+				s.state = Follower
+			}
+		}
+		s.mu.Unlock()
+	}
+}
+
+func (s *Server) resetElectionTimeout() {
+	s.electionTimeout = time.Duration(rand.Intn(150)+150) * time.Millisecond
+	s.lastHeartbeatTime = time.Now()
+}
+
+func (s *Server) RequestVoteToServer(ctx context.Context, port string) (bool, error) {
+	conn, err := grpc.NewClient(port, grpc.WithTransportCredentials(insecure.NewCredentials()))
+	if err != nil {
+		return false, fmt.Errorf("did not connect to %s : %v", port, err)
+	}
+	defer conn.Close()
+
+	client := pb.NewRaftClient(conn)
+
+	req := &pb.VoteRequest{
+		Term:         1,
+		CandidateId:  1,
+		LastLogIndex: 1,
+		LastLogTerm:  1,
+	}
+
+	resp, err := client.RequestVote(ctx, req)
+	if err != nil {
+		return false, fmt.Errorf("RequestVote failed to %s: %v", port, err)
+	}
+
+	log.Printf("RequestVote response: %+v", resp)
+	return resp.VoteGranted, nil
 }
 
 func (s *Server) AppendEntries(ctx context.Context, in *pb.AppendRequest) (*pb.AppendResponse, error) {
@@ -50,49 +160,3 @@ func (s *Server) RequestVote(ctx context.Context, in *pb.VoteRequest) (*pb.VoteR
 		VoteGranted: true,
 	}, nil
 }
-
-// func (s *Server) Start() error {
-// 	listener, err := net.Listen("tcp", s.ListenAddr)
-// 	if err != nil {
-// 		return fmt.Errorf("listen error: %s", err)
-// 	}
-
-// 	grpcServer := grpc.NewServer()
-// 	reflection.Register(grpcServer)
-
-// 	pb.RegisterRaftServer(grpcServer, &Server{})
-// 	if err := grpcServer.Serve(listener); err != nil {
-// 		return fmt.Errorf("failed to serve %s", err)
-// 	}
-
-// 	log.Printf("Server started on : %s", s.ListenAddr)
-// 	return nil
-// 	// for {
-// 	// 	conn, err := listener.Accept()
-// 	// 	if err != nil {
-// 	// 		log.Printf("accept error : %s", err)
-// 	// 		continue
-// 	// 	}
-
-// 	// 	go s.handleConn(conn)
-// 	// }
-// }
-
-// func (s *Server) handleConn(conn net.Conn) {
-// 	defer conn.Close()
-
-// 	log.Printf("Connection made - %s <- %s", s.ListenAddr, conn.LocalAddr())
-
-// 	buf := make([]byte, 1024)
-// 	for {
-// 		n, err := conn.Read(buf)
-// 		if err != nil {
-// 			log.Printf("read error : %s", err)
-// 			break
-// 		}
-
-// 		msg := buf[:n]
-// 		log.Println(string(msg))
-// 	}
-
-// }

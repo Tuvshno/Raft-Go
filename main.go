@@ -1,6 +1,7 @@
 package main
 
 import (
+	"flag"
 	"log"
 	"net"
 
@@ -10,6 +11,9 @@ import (
 )
 
 func main() {
+	id := flag.Int("id", 1, "id of the server")
+	flag.Parse()
+
 	listener, err := net.Listen("tcp", ":8000")
 	if err != nil {
 		log.Fatalf("failed to listen : %s", err)
@@ -18,9 +22,11 @@ func main() {
 	s := grpc.NewServer()
 	reflection.Register(s)
 
-	server := NewServer()
+	server := NewServer(*id)
 
-	log.Printf("Raft Server listening at %s", listener.Addr())
+	go server.electionTimer()
+
+	log.Printf("Raft Server %d listening at %s", server.id, listener.Addr())
 	pb.RegisterRaftServer(s, server)
 	if err := s.Serve(listener); err != nil {
 		log.Fatalf("failed to serve : %s", err)
