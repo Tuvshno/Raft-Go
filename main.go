@@ -11,18 +11,18 @@ import (
 )
 
 func main() {
-	id := flag.Int("id", 1, "id of the server")
+	id := flag.Int64("id", 1, "id of the server")
 	flag.Parse()
-
-	listener, err := net.Listen("tcp", ":8000")
-	if err != nil {
-		log.Fatalf("failed to listen : %s", err)
-	}
 
 	s := grpc.NewServer()
 	reflection.Register(s)
 
 	server := NewServer(*id)
+
+	listener, err := net.Listen("tcp", server.cluster[*id])
+	if err != nil {
+		log.Fatalf("failed to listen : %s", err)
+	}
 
 	go server.electionTimer()
 
