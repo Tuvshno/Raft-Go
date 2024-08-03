@@ -21,6 +21,11 @@ const (
 	Leader    State = "Leader"
 )
 
+var (
+	appendEntriesLogRateLimiter = 300
+	appendEntriesLogCounter     = 0
+)
+
 type Server struct {
 	id      int64
 	cluster map[int64]string
@@ -162,7 +167,7 @@ func (s *Server) RequestAppendEntries(ctx context.Context, port string) (bool, e
 		return false, fmt.Errorf("AppendEntries failed to %s: %v", port, err)
 	}
 
-	log.Printf("AppendEntries response: %+v", resp)
+	// log.Printf("AppendEntries response from %s : %+v", port, resp)
 	return resp.Success, nil
 }
 
@@ -187,6 +192,11 @@ func (s *Server) RequestVoteToServer(ctx context.Context, port string) (bool, er
 		return false, fmt.Errorf("RequestVote failed to %s: %v", port, err)
 	}
 
+	appendEntriesLogCounter++
+	if appendEntriesLogCounter%appendEntriesLogRateLimiter == 0 {
+		log.Printf("AppendEntries response from %s : %+v", port, resp)
+	}
+
 	log.Printf("RequestVote response: %+v", resp)
 	return resp.VoteGranted, nil
 }
@@ -205,7 +215,12 @@ func (s *Server) AppendEntries(ctx context.Context, in *pb.AppendRequest) (*pb.A
 
 	s.currentTerm = in.Term
 	s.state = Follower
+	s.votedFor = in.LeaderId
 
+	appendEntriesLogCounter++
+	if appendEntriesLogCounter%appendEntriesLogRateLimiter == 0 {
+		log.Printf("Following Leader - %d at %s", in.LeaderId, s.cluster[in.LeaderId])
+	}
 	return &pb.AppendResponse{
 		Term:    s.currentTerm,
 		Success: true,
@@ -221,6 +236,7 @@ func (s *Server) RequestVote(ctx context.Context, in *pb.VoteRequest) (*pb.VoteR
 		}, nil
 	}
 
+	s.votedFor = in.CandidateId
 	return &pb.VoteResponse{
 		Term:        s.currentTerm,
 		VoteGranted: true,

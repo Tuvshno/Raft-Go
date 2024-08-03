@@ -24,6 +24,8 @@ func main() {
 		log.Fatalf("failed to listen : %s", err)
 	}
 
+	// Check if a leader exists in cluster
+
 	go server.electionTimer()
 
 	log.Printf("Raft Server %d listening at %s", server.id, listener.Addr())
