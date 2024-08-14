@@ -17,17 +17,17 @@ func main() {
 	s := grpc.NewServer()
 	reflection.Register(s)
 
-	server := NewServer(*id)
+	raft := NewRaft(*id)
 
-	listener, err := net.Listen("tcp", server.cluster[*id])
+	listener, err := net.Listen("tcp", raft.cluster[*id])
 	if err != nil {
 		log.Fatalf("failed to listen : %s", err)
 	}
 
-	go server.electionTimer()
+	go raft.run()
 
-	log.Printf("Raft Server %d listening at %s", server.id, listener.Addr())
-	pb.RegisterRaftServer(s, server)
+	log.Printf("Raft Server %d listening at %s", raft.id, listener.Addr())
+	pb.RegisterRaftServer(s, raft)
 	if err := s.Serve(listener); err != nil {
 		log.Fatalf("failed to serve : %s", err)
 	}

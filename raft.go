@@ -13,44 +13,80 @@ import (
 	"google.golang.org/grpc/credentials/insecure"
 )
 
-type State string
+// RaftState are the states that the Raft Node could be in.
+type RaftState uint8
 
 const (
-	Follower  State = "Follower"
-	Candidate State = "Candidate"
-	Leader    State = "Leader"
+	// Follower is the default state of the Raft Node.
+	// Responsible for keeping a heartbeat and replicating entries from the leader.
+	Follower RaftState = iota
+
+	// Candidate is the election state of the Raft Node.
+	// Responsible for starting an election and electing a new leader.
+	Candidate
+
+	// Leader is the leadership state of the Raft Node.
+	// Responsible for recieving operations from the client and
+	// replicating them to the Follower nodes.
+	Leader
 )
+
+// String is the string representation of the RaftState.
+func (raftState RaftState) String() string {
+	switch raftState {
+	case Follower:
+		return "Follower"
+	case Candidate:
+		return "Candidate"
+	case Leader:
+		return "Leader"
+	default:
+		return fmt.Sprintf("%d", raftState)
+	}
+}
 
 var (
 	appendEntriesLogRateLimiter = 300
 	appendEntriesLogCounter     = 0
 )
 
-type Server struct {
-	id      int64
-	cluster map[int64]string
+// Raft implements a Raft Node.
+type Raft struct {
+	// id identifies the current Raft Node using int64 id.
+	id uint64
 
+	// cluster holds the the cluster of other raft nodes.
+	cluster map[uint64]string
+
+	// RPC Server for the Raft Node to communicate with other raft nodes.
 	pb.UnimplementedRaftServer
 
+	// applyChan is used to send logs to the main thread to be commited to the state machine
+	applyCh chan *Log
+
 	mu                sync.Mutex
-	state             State
+	state             RaftState
 	electionTimeout   time.Duration
 	lastHeartbeatTime time.Time
 
-	currentTerm int64
-	votedFor    int64
+	stateChangeCh chan RaftState
+	shutdownCh    chan struct{}
+	heartbeatCh   chan struct{}
+
+	currentTerm uint64
+	votedFor    uint64
 	log         []string
 
 	commitIndex int64
 	lastIndex   int64
 
-	nextIndex  []int64
-	matchIndex []int64
+	nextIndex  []uint64
+	matchIndex []uint64
 }
 
-func NewServer(id int64) *Server {
+func NewRaft(id uint64) *Raft {
 	// Hard Coded Cluster for testing
-	cluster := map[int64]string{
+	cluster := map[uint64]string{
 		1: ":8001",
 		2: ":8002",
 		3: ":8003",
@@ -58,42 +94,52 @@ func NewServer(id int64) *Server {
 		5: ":8005",
 	}
 
-	s := &Server{
+	s := &Raft{
 		id:      id,
 		cluster: cluster,
 
 		state: Follower,
 
-		currentTerm: 0,
-		votedFor:    -1,
+		stateChangeCh: make(chan RaftState),
+		shutdownCh:    make(chan struct{}),
+
+		currentTerm: 1,
+		votedFor:    0,
 		log:         make([]string, 0),
 
 		commitIndex: -1,
 		lastIndex:   -1,
 
-		nextIndex:  make([]int64, 0),
-		matchIndex: make([]int64, 0),
+		nextIndex:  make([]uint64, 0),
+		matchIndex: make([]uint64, 0),
 	}
 	s.resetElectionTimeout()
 
 	return s
 }
 
-func (s *Server) electionTimer() {
+func (s *Raft) run() {
 	for {
-		s.mu.Lock()
-		if s.state != Leader && time.Since(s.lastHeartbeatTime) >= s.electionTimeout {
-			s.state = Candidate
-			s.currentTerm++
-			log.Printf("Starting new election %d...", s.currentTerm)
+		select {
+		case <-time.After(time.Duration(rand.Intn(150)+150) * time.Millisecond):
+			s.stateChangeCh <- Candidate
 			s.startElection()
+		case <-s.heartbeatCh:
+
+		case newState := <-s.stateChangeCh:
+			s.handleStateChange(newState)
+		case <-s.shutdownCh:
+			return
 		}
-		s.mu.Unlock()
-		time.Sleep(10 * time.Millisecond)
 	}
 }
 
-func (s *Server) startElection() {
+func (s *Raft) handleStateChange(newState RaftState) {
+	log.Printf("Server %d transition from %s to %s", s.id, s.state, newState)
+	s.state = newState
+}
+
+func (s *Raft) startElection() {
 	electionSuccess := false
 	numVotes := 1
 
@@ -124,7 +170,7 @@ func (s *Server) startElection() {
 
 }
 
-func (s *Server) Lead() {
+func (s *Raft) Lead() {
 	if s.state == Leader {
 		for {
 			for _, port := range s.cluster {
@@ -139,12 +185,12 @@ func (s *Server) Lead() {
 	}
 }
 
-func (s *Server) resetElectionTimeout() {
+func (s *Raft) resetElectionTimeout() {
 	s.electionTimeout = time.Duration(rand.Intn(150)+150) * time.Millisecond
 	s.lastHeartbeatTime = time.Now()
 }
 
-func (s *Server) RequestAppendEntries(ctx context.Context, port string) (bool, error) {
+func (s *Raft) RequestAppendEntries(ctx context.Context, port string) (bool, error) {
 	conn, err := grpc.NewClient(port, grpc.WithTransportCredentials(insecure.NewCredentials()))
 	if err != nil {
 		return false, fmt.Errorf("did not connect to %s : %v", port, err)
@@ -171,7 +217,7 @@ func (s *Server) RequestAppendEntries(ctx context.Context, port string) (bool, e
 	return resp.Success, nil
 }
 
-func (s *Server) RequestVoteToServer(ctx context.Context, port string) (bool, error) {
+func (s *Raft) RequestVoteToServer(ctx context.Context, port string) (bool, error) {
 	conn, err := grpc.NewClient(port, grpc.WithTransportCredentials(insecure.NewCredentials()))
 	if err != nil {
 		return false, fmt.Errorf("did not connect to %s : %v", port, err)
@@ -201,7 +247,7 @@ func (s *Server) RequestVoteToServer(ctx context.Context, port string) (bool, er
 	return resp.VoteGranted, nil
 }
 
-func (s *Server) AppendEntries(ctx context.Context, in *pb.AppendRequest) (*pb.AppendResponse, error) {
+func (s *Raft) AppendEntries(ctx context.Context, in *pb.AppendRequest) (*pb.AppendResponse, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
@@ -228,7 +274,7 @@ func (s *Server) AppendEntries(ctx context.Context, in *pb.AppendRequest) (*pb.A
 
 }
 
-func (s *Server) RequestVote(ctx context.Context, in *pb.VoteRequest) (*pb.VoteResponse, error) {
+func (s *Raft) RequestVote(ctx context.Context, in *pb.VoteRequest) (*pb.VoteResponse, error) {
 	if s.currentTerm > in.Term {
 		return &pb.VoteResponse{
 			Term:        s.currentTerm,

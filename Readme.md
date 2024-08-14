@@ -33,6 +33,16 @@ This project has significantly deepened my understanding of distributed consensu
 
 - Concurrency in Distributed Systems: Handling the concurrency challenges that arise in a distributed environment, particularly in coordinating actions across multiple nodes while ensuring the system remains consistent and available.
 
+
+## Design Patterns I learned
+This project uses many different designs in order to create a clean architecture. I used many different resources and projects to consistently refactor my code in order to make it the best it could be.
+
+- Channels for cross thread communication
+
+- Stores
+
+
+
 As this project progresses, the focus will be on completing the leader election and log replication mechanisms, ensuring robust consensus in the presence of failures. Additionally, I plan to implement persistence and recovery to handle real-world scenarios where nodes may crash and restart.
 
 Beyond that, there are many exciting opportunities for further development. I intend to explore and implement advanced concurrency patterns to enhance the system's performance and scalability. I also plan to deploy this implementation on Kubernetes, allowing for automated management, scaling, and deployment across a cluster of machines. These steps will not only improve the system's robustness but also prepare it for real-world use cases where distributed consensus is critical.
